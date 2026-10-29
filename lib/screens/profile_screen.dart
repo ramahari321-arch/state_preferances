@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../providers/user_provider.dart';
 
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
   @override
@@ -12,12 +15,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _nameController;
   late TextEditingController _emailController;
+  final TextEditingController _favoriteController = TextEditingController();
   bool _controllersInitialized = false;
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_controllersInitialized) return;
-    final provider = UserProvider.of(context);
+    final provider = Provider.of<UserProvider>(context, listen: false);
     _nameController = TextEditingController(text: provider.user.name);
     _emailController = TextEditingController(text: provider.user.email);
     _controllersInitialized = true;
@@ -27,25 +31,63 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
+    _favoriteController.dispose();
     super.dispose();
   }
 
-  void _saveProfile() {
-    if (_formKey.currentState!.validate()) {
-      final provider = UserProvider.of(context);
-      final updatedUser = provider.user.copyWith(
-        name: _nameController.text.trim(),
-        email: _emailController.text.trim(),
-        isLoggedIn: true,
-      );
-      provider.updateUser(updatedUser);
+  Future<void> _saveProfile() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+
+    // 1. Validasi karakter berbahaya
+    final dangerousPattern = RegExp(r'[<>]|script', caseSensitive: false);
+    if (dangerousPattern.hasMatch(name)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Profil berhasil disimpan'),
-          backgroundColor: Colors.green,
+          content: Text('Error: Nama mengandung karakter berbahaya / skrip!'),
+          backgroundColor: Colors.red,
         ),
       );
+      return;
     }
+
+    // Ambil provider & messenger sebelum async gap
+    final provider = Provider.of<UserProvider>(context, listen: false);
+    final messenger = ScaffoldMessenger.of(context);
+
+    // 2. Cek email duplikat via SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
+    final existingEmail = prefs.getString('user_email') ?? '';
+    if (existingEmail.isNotEmpty && email == existingEmail) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Peringatan: Email ini sudah pernah Anda daftarkan!'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // 3. Simpan data
+    final updatedUser = provider.user.copyWith(
+      name: name,
+      email: email,
+      isLoggedIn: true,
+    );
+
+    await provider.updateUser(updatedUser);
+    if (!mounted) return;
+
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Profil berhasil disimpan'),
+        backgroundColor: Colors.green,
+      ),
+    );
   }
 
   void _logout() {
@@ -62,7 +104,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              UserProvider.of(context).logout();
+              Provider.of<UserProvider>(context, listen: false).logout();
               Navigator.pop(context);
             },
             child: const Text('Logout', style: TextStyle(color: Colors.red)),
@@ -74,7 +116,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final provider = UserProvider.of(context);
+    final provider = Provider.of<UserProvider>(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profil'),
@@ -155,6 +197,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           padding: const EdgeInsets.symmetric(vertical: 16),
                         ),
                       ),
+                      const SizedBox(height: 24),
+                      const Text(
+                        'Daftar Favorit / Hobi',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: _favoriteController,
+                              decoration: const InputDecoration(
+                                hintText: 'Tambah hobi baru...',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton.filled(
+                            icon: const Icon(Icons.add),
+                            onPressed: () {
+                              if (_favoriteController.text.trim().isNotEmpty) {
+                                provider.addFavorite(
+                                  _favoriteController.text.trim(),
+                                );
+                                _favoriteController.clear();
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (provider.favorites.isEmpty)
+                        const Text(
+                          'Belum ada favorit.',
+                          style: TextStyle(color: Colors.grey),
+                        )
+                      else
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: provider.favorites.map((item) {
+                            return Chip(
+                              label: Text(item),
+                              onDeleted: () => provider.removeFavorite(item),
+                              deleteIconColor: Colors.red,
+                            );
+                          }).toList(),
+                        ),
                       const SizedBox(height: 16),
                       Card(
                         color: Colors.amber[50],
